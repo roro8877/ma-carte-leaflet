@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Carte Leaflet - Articles & Tunneliers + Recherche</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- Leaflet + clustering -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.Default.css" />
+
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+    }
+    #map {
+      height: 100vh;
+      width: 100%;
+    }
+    .leaflet-popup-content {
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    #search-container {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: white;
+      padding: 10px;
+      border-radius: 5px;
+      box-shadow: 0 0 5px rgba(0,0,0,0.2);
+      z-index: 1000;
+    }
+    #search-input {
+      width: 200px;
+      padding: 5px;
+    }
+  </style>
+</head>
+<body>
+
+<div id="search-container">
+  <input type="text" id="search-input" placeholder="Rechercher un titre..." />
+  <button onclick="rechercherTitre()">Rechercher</button>
+  <button onclick="reinitialiserRecherche()">Réinitialiser</button>
+</div>
+
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster/dist/leaflet.markercluster.js"></script>
+
+<script>
+  const map = L.map('map').setView([46.8, 2.2], 6);
+
+  L.tileLayer('https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap France',
+    maxZoom: 18
+  }).addTo(map);
+
+  const clusterArticles = L.markerClusterGroup({ maxClusterRadius: 30 });
+  const clusterTunneliers = L.markerClusterGroup({ maxClusterRadius: 30 });
+  const allArticleMarkers = []; // pour la recherche
+
+  function chargerCouche(url, groupe, couleur, stockerMarkers = false) {
+    fetch(url)
+      .then(res => res.json())
+      .then(data => {
+        const pointsParCoord = {};
+
+        data.features.forEach(feature => {
+          const coords = feature.geometry?.coordinates;
+          const props = feature.properties;
+          if (!coords) return;
+
+          const key = coords.join(',');
+          if (!pointsParCoord[key]) {
+            pointsParCoord[key] = [];
+          }
+          pointsParCoord[key].push(props);
+        });
+
+        Object.entries(pointsParCoord).forEach(([coordStr, features]) => {
+          const [lon, lat] = coordStr.split(',').map(Number);
+
+          const popupContent = features.map(f =>
+            Object.entries(f)
+              .map(([k, v]) => `<strong>${k}</strong> : ${v}`)
+              .join('<br>') + '<hr>'
+          ).join('');
+
+          const customIcon = L.divIcon({
+            className: 'custom-icon',
+            html: `<div style="background:${couleur}; width: 14px; height: 14px; border-radius: 50%; border: 2px solid white;"></div>`,
+            iconSize: [18, 18]
+          });
+
+          const marker = L.marker([lat, lon], { icon: customIcon }).bindPopup(popupContent);
+          groupe.addLayer(marker);
+
+          if (stockerMarkers) {
+            marker.feature = { properties: features[0] }; // stocker les props
+            allArticleMarkers.push(marker);
+          }
+        });
+      });
+  }
+
+  const urlArticles = 'https://raw.githubusercontent.com/roro8877/ma-carte-leaflet/refs/heads/main/Copie%20de%20%40Liste_articles_TES_1974-2024_v2.geojson';
+  const urlTunneliers = 'https://raw.githubusercontent.com/roro8877/ma-carte-leaflet/refs/heads/main/Copie%20de%20%40Liste_fiches_tunnelier_v2.geojson';
+
+  chargerCouche(urlArticles, clusterArticles, '#1e90ff', true);
+  chargerCouche(urlTunneliers, clusterTunneliers, '#f44336');
+
+  map.addLayer(clusterArticles);
+  map.addLayer(clusterTunneliers);
+
+  const controlLayers = L.control.layers(null, {
+    "Articles scientifiques": clusterArticles,
+    "Fiches tunneliers": clusterTunneliers
+  }, { collapsed: false }).addTo(map);
+
+  // Ajouter la légende dans le panneau de couches
+  const legendHTML = `
+    <div style="margin-top:10px;">
+      <strong>Légende :</strong><br>
+      <span style="display:inline-block; width:12px; height:12px; background:#1e90ff; border-radius:50%; margin-right:5px;"></span> Articles scientifiques<br>
+      <span style="display:inline-block; width:12px; height:12px; background:#f44336; border-radius:50%; margin-right:5px;"></span> Fiches tunneliers
+    </div>
+  `;
+
+  setTimeout(() => {
+    const controles = document.querySelector('.leaflet-control-layers-list');
+    if (controles) {
+      const legende = document.createElement('div');
+      legende.innerHTML = legendHTML;
+      controles.appendChild(legende);
+    }
+  }, 500);
+
+  function rechercherTitre() {
+    const terme = document.getElementById('search-input').value.toLowerCase();
+    if (!terme) return;
+
+    clusterArticles.clearLayers();
+
+    const resultats = allArticleMarkers.filter(marker => {
+      const titre = marker.feature.properties['Titre']?.toLowerCase() || '';
+      return titre.includes(terme);
+    });
+
+    resultats.forEach(marker => clusterArticles.addLayer(marker));
+
+    if (resultats.length > 0) {
+      const group = new L.featureGroup(resultats);
+      map.fitBounds(group.getBounds().pad(0.2));
+    }
+  }
+
+  function reinitialiserRecherche() {
+    document.getElementById('search-input').value = '';
+    clusterArticles.clearLayers();
+    allArticleMarkers.forEach(marker => clusterArticles.addLayer(marker));
+  }
+</script>
+
+</body>
+</html>
