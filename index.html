@@ -62,8 +62,8 @@
     maxZoom: 18
   }).addTo(map);
 
-  const clusterArticles = L.markerClusterGroup({ maxClusterRadius: 30 });
-  const clusterTunneliers = L.markerClusterGroup({ maxClusterRadius: 30 });
+  const clusterArticles = L.markerClusterGroup({ maxClusterRadius: 300 });
+  const clusterTunneliers = L.markerClusterGroup({ maxClusterRadius: 300 });
   const allArticleMarkers = []; // pour la recherche
 
   function chargerCouche(url, groupe, couleur, stockerMarkers = false) {
