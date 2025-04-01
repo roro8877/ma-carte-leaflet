@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Carte Leaflet - Articles & Tunneliers + Recherche</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- Leaflet + clustering -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.Default.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/noUiSlider/15.7.1/nouislider.min.css" />
+
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+    }
+    #map {
+      height: 100vh;
+      width: 100%;
+    }
+    .leaflet-popup-content {
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    .leaflet-control-zoom {
+      bottom: 10px;
+      top: auto;
+      left: 10px;
+      right: auto;
+    }
+    #search-container, #filter-tunneliers {
+      position: absolute;
+      left: 10px;
+      background: white;
+      padding: 10px;
+      border-radius: 5px;
+      box-shadow: 0 0 5px rgba(0,0,0,0.2);
+      z-index: 1000;
+      width: 250px;
+    }
+    #search-container {
+      top: 10px;
+    }
+    #filter-tunneliers {
+      top: 210px;
+    }
+    #search-input, #transport-filter, #fonctionnalite-filter {
+      width: 100%;
+      padding: 5px;
+      margin-top: 5px;
+    }
+    .range-display {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.9em;
+      margin-top: 5px;
+    }
+    #slider-longueur, #slider-diametre {
+      margin-top: 5px;
+      margin-bottom: 10px;
+    }
+	#logo-aftes, #logo-cetu {
+      position: absolute;
+      bottom: 20px;
+      height: 100px;
+      z-index: 1001;
+      opacity: 0.95;
+    }
+    #logo-aftes {
+      right: 120px;
+    }
+    #logo-cetu {
+      right: 10px;
+    }
+
+  </style>
+</head>
+<img id="logo-aftes" src="https://raw.githubusercontent.com/roro8877/ma-carte-leaflet/refs/heads/main/logo-asso-aftes.png" alt="AFTES logo">
+<img id="logo-cetu" src="https://raw.githubusercontent.com/roro8877/ma-carte-leaflet/refs/heads/main/cetu_logo_rvb.png" alt="CETU logo">
+
+<body>
+
+<!-- Interface de filtre pour articles scientifiques -->
+<div id="search-container">
+  <strong>Recherches sur les articles de la revue TES </strong><br><br>
+  <input type="text" id="search-input" placeholder="Rechercher un titre..." />
+  <br>
+  <select id="transport-filter">
+    <option value="">-- Tous les modes de transport --</option>
+  </select>
+  <br>
+  <button onclick="appliquerFiltres()">Filtrer</button>
+  <button onclick="reinitialiserRecherche()">Réinitialiser</button>
+</div>
+
+<!-- Interface de filtre pour fiches tunneliers -->
+<div id="filter-tunneliers">
+  <strong>Recherches sur les fiches tunneliers</strong><br><br>
+  <label for="fonctionnalite-filter">Fonctionnalité :</label><br>
+  <select id="fonctionnalite-filter">
+    <option value="">-- Toutes --</option>
+  </select><br>
+
+  <label>Diamètre (m) :</label><br>
+  <div id="slider-diametre"></div>
+  <div class="range-display">
+    <span id="diametre-min-val">0</span>
+    <span id="diametre-max-val">20</span>
+  </div>
+
+  <label>Longueur (m) :</label><br>
+  <div id="slider-longueur"></div>
+  <div class="range-display">
+    <span id="longueur-min-val">0</span>
+    <span id="longueur-max-val">10000</span>
+  </div>
+
+  <button onclick="filtrerTunneliers()">Filtrer</button>
+  <button onclick="reinitialiserTunneliers()">Réinitialiser</button>
+</div>
+
+<!-- Carte Leaflet -->
+<div id="map"></div>
+
+<!-- Scripts -->
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster/dist/leaflet.markercluster.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/noUiSlider/15.7.1/nouislider.min.js"></script>
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster/dist/leaflet.markercluster.js"></script>
+
+<script>
+  const map = L.map('map', { zoomControl: false }).setView([46.8, 2.2], 6);
+  L.control.zoom({ position: 'bottomleft' }).addTo(map);
+
+  L.tileLayer('https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap France',
+    maxZoom: 18
+  }).addTo(map);
+
+  const clusterArticles = L.markerClusterGroup({ maxClusterRadius: 30 });
+  const clusterTunneliers = L.markerClusterGroup({ maxClusterRadius: 30 });
+  const allArticleMarkers = [], allTunnelierMarkers = [];
+  const transportOptions = new Set(), fonctionnaliteOptions = new Set();
+
+  function chargerCouche(url, groupe, couleur, stockerMarkers = false, type = '') {
+    fetch(url).then(res => res.json()).then(data => {
+      const pointsParCoord = {};
+      data.features.forEach(feature => {
+        const coords = feature.geometry?.coordinates;
+        const props = feature.properties;
+        if (!coords) return;
+        const key = coords.join(',');
+        if (!pointsParCoord[key]) pointsParCoord[key] = [];
+        pointsParCoord[key].push(props);
+      });
+
+      Object.entries(pointsParCoord).forEach(([coordStr, features]) => {
+        const [lon, lat] = coordStr.split(',').map(Number);
+        const marker = L.marker([lat, lon], {
+          icon: L.divIcon({
+            className: 'custom-icon',
+            html: `<div style="background:${couleur}; width:14px; height:14px; border-radius:50%; border:2px solid white;"></div>`,
+            iconSize: [18, 18]
+          })
+        });
+        marker.allFeatures = features;
+        marker.bindPopup(features.map(f => Object.entries(f).map(([k, v]) => `<strong>${k}</strong> : ${v}`).join('<br>') + '<hr>').join(''));
+        if (stockerMarkers) {
+          if (type === 'article') {
+            allArticleMarkers.push(marker);
+            features.forEach(f => f['Mode transport'] && transportOptions.add(f['Mode transport']));
+          } else if (type === 'tunnelier') {
+            allTunnelierMarkers.push(marker);
+            features.forEach(f => f['Fonctionnalité'] && fonctionnaliteOptions.add(f['Fonctionnalité']));
+          }
+        }
+        groupe.addLayer(marker);
+      });
+
+      if (type === 'article') {
+        const select = document.getElementById('transport-filter');
+        Array.from(transportOptions).sort().forEach(opt => {
+          const el = document.createElement('option');
+          el.value = opt; el.textContent = opt;
+          select.appendChild(el);
+        });
+      }
+      if (type === 'tunnelier') {
+        const select = document.getElementById('fonctionnalite-filter');
+        Array.from(fonctionnaliteOptions).sort().forEach(opt => {
+          const el = document.createElement('option');
+          el.value = opt; el.textContent = opt;
+          select.appendChild(el);
+        });
+      }
+    });
+  }
+
+  const urlArticles = 'https://raw.githubusercontent.com/roro8877/ma-carte-leaflet/refs/heads/main/Copie%20de%20%40Liste_articles_TES_1974-2024_v2.geojson';
+  const urlTunneliers = 'https://raw.githubusercontent.com/roro8877/ma-carte-leaflet/refs/heads/main/Copie%20de%20%40Liste_fiches_tunnelier_v2.geojson';
+
+  chargerCouche(urlArticles, clusterArticles, '#1e90ff', true, 'article');
+  chargerCouche(urlTunneliers, clusterTunneliers, '#f44336', true, 'tunnelier');
+
+  map.addLayer(clusterArticles);
+  map.addLayer(clusterTunneliers);
+
+  L.control.layers(null, {
+    "Articles revue TES": clusterArticles,
+    "Fiches tunneliers": clusterTunneliers
+  }, { collapsed: false }).addTo(map);
+
+  setTimeout(() => {
+    const controles = document.querySelector('.leaflet-control-layers-list');
+    if (controles) {
+      const legende = document.createElement('div');
+      legende.innerHTML = `
+        <div style="margin-top:10px;">
+          <strong>Légende :</strong><br>
+          <span style="display:inline-block;width:12px;height:12px;background:#1e90ff;border-radius:50%;margin-right:5px;"></span> Articles scientifiques<br>
+          <span style="display:inline-block;width:12px;height:12px;background:#f44336;border-radius:50%;margin-right:5px;"></span> Fiches tunneliers
+        </div>`;
+      controles.appendChild(legende);
+    }
+  }, 500);
+
+  function appliquerFiltres() {
+    const terme = document.getElementById('search-input').value.toLowerCase();
+    const mode = document.getElementById('transport-filter').value;
+    clusterArticles.clearLayers();
+    const filtres = allArticleMarkers.filter(marker => {
+      const filtered = marker.allFeatures.filter(f => {
+        const titre = f['Titre']?.toLowerCase() || '', m = f['Mode transport'] || '';
+        return titre.includes(terme) && (!mode || m === mode);
+      });
+      if (filtered.length > 0) {
+        marker.bindPopup(filtered.map(f => Object.entries(f).map(([k, v]) => `<strong>${k}</strong> : ${v}`).join('<br>') + '<hr>').join(''));
+        return true;
+      }
+      return false;
+    });
+    filtres.forEach(marker => clusterArticles.addLayer(marker));
+  }
+
+  function reinitialiserRecherche() {
+    document.getElementById('search-input').value = '';
+    document.getElementById('transport-filter').value = '';
+    clusterArticles.clearLayers();
+    allArticleMarkers.forEach(marker => {
+      marker.bindPopup(marker.allFeatures.map(f => Object.entries(f).map(([k, v]) => `<strong>${k}</strong> : ${v}`).join('<br>') + '<hr>').join(''));
+      clusterArticles.addLayer(marker);
+    });
+  }
+
+  function filtrerTunneliers() {
+    const fct = document.getElementById('fonctionnalite-filter').value;
+    clusterTunneliers.clearLayers();
+    const filtres = allTunnelierMarkers.filter(marker => {
+      const filtered = marker.allFeatures.filter(f => {
+        const d = parseFloat((f['Diamètre'] || '').replace(',', '.') || 0);
+        const l = parseFloat((f['Longueur'] || '').replace(',', '.') || 0);
+        return (!fct || f['Fonctionnalité'] === fct) && d >= diametreMin && d <= diametreMax && l >= longueurMin && l <= longueurMax;
+      });
+      if (filtered.length > 0) {
+        marker.bindPopup(filtered.map(f => Object.entries(f).map(([k, v]) => `<strong>${k}</strong> : ${v}`).join('<br>') + '<hr>').join(''));
+        return true;
+      }
+      return false;
+    });
+    filtres.forEach(marker => clusterTunneliers.addLayer(marker));
+  }
+
+  function reinitialiserTunneliers() {
+    document.getElementById('fonctionnalite-filter').value = '';
+    sliderDiametre.noUiSlider.set([0, 20]);
+    sliderLongueur.noUiSlider.set([0, 10000]);
+    clusterTunneliers.clearLayers();
+    allTunnelierMarkers.forEach(marker => {
+      marker.bindPopup(marker.allFeatures.map(f => Object.entries(f).map(([k, v]) => `<strong>${k}</strong> : ${v}`).join('<br>') + '<hr>').join(''));
+      clusterTunneliers.addLayer(marker);
+    });
+  }
+</script>
+
+<script>
+  let longueurMin = 0, longueurMax = 10000;
+  const sliderLongueur = document.getElementById('slider-longueur');
+  noUiSlider.create(sliderLongueur, {
+    start: [0, 10000],
+    connect: true,
+    step: 10,
+    range: { 'min': 0, 'max': 10000 },
+    format: { to: value => Math.round(value), from: value => Number(value) }
+  });
+  sliderLongueur.noUiSlider.on('update', function (values) {
+    document.getElementById('longueur-min-val').innerText = values[0];
+    document.getElementById('longueur-max-val').innerText = values[1];
+    longueurMin = parseFloat(values[0]);
+    longueurMax = parseFloat(values[1]);
+  });
+
+  let diametreMin = 0, diametreMax = 20;
+  const sliderDiametre = document.getElementById('slider-diametre');
+  noUiSlider.create(sliderDiametre, {
+    start: [0, 20],
+    connect: true,
+    step: 0.1,
+    range: { 'min': 0, 'max': 20 },
+    format: { to: value => parseFloat(value).toFixed(1), from: value => Number(value) }
+  });
+  sliderDiametre.noUiSlider.on('update', function (values) {
+    document.getElementById('diametre-min-val').innerText = values[0];
+    document.getElementById('diametre-max-val').innerText = values[1];
+    diametreMin = parseFloat(values[0]);
+    diametreMax = parseFloat(values[1]);
+  });
+</script>
+
+</body>
+</html>
